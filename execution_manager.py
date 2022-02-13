@@ -199,13 +199,15 @@ class App(Workspace):
         self,
         *,
         home: str,
+        runner: Callable[[Execution], None],
         name: str = None,
         default_config: dict = None,
-        runner: Callable[[Execution], None],
+        status_getter: Callable[[Execution], dict] = None,
     ) -> None:
         super().__init__(home, name)
         self.runner = runner
         self.default_config = default_config
+        self.status_getter = status_getter
 
         if not os.path.isdir(self.home):
             os.makedirs(self.home, exist_ok=True)

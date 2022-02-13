@@ -1,9 +1,10 @@
-import typer
-
-
+typer
 tqsdk
 typer
 questionary
 psutil
 dataset
 tailer
+pandas
+pendulum
+python-daemon # not needed on windows
