@@ -273,12 +273,13 @@ class App(Workspace):
             if on_windows:
                 # from win32process import DETACHED_PROCESS
                 DETACHED_PROCESS = 8
-                Popen(
-                    [sys.executable, sys.argv[0], "start-execution", e.name],
+                pid = Popen(
+                    [sys.executable, sys.argv[0], "start", e.name],
                     creationflags=DETACHED_PROCESS,
                     shell=False,
                     close_fds=True,
-                )
+                ).pid
+                e.logger.info(f"running on windows: {pid}")
             else:
                 import daemon
 
