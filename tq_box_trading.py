@@ -9,7 +9,7 @@ strategy_home = em.normabspath(f"~/.quant-future/{strategy_name}")
 config_schema = {
     "tq.username": "易信账号 https://account.shinnytech.com/",
     "tq.password": "易信账号密码",
-    "contract.symbol": "合约名称",
+    "contract.name": "合约名称",
     "resistance.upper": "阻力带上沿",
     "resistance.lower": "阻力带下沿",
     "support.upper": "支撑带上沿",
@@ -17,30 +17,36 @@ config_schema = {
     "stop_loss_percent": "止损点百分点",
 }
 
-# from tqsdk import TqApi, TqAuth
-
 
 def strategy(e: em.Execution):
-    import time
+    from tqsdk import TqApi, TqAuth
 
-    print(e.read_text(e.config_file))
+    config = e.read_config()
+    auth = TqAuth(config["tq.username"], config["tq.password"])
+    api = TqApi(auth=auth)
+    # api = TqApi(web_gui=True, auth=auth)
+    symbol = config["contract.name"]
+    resistance_upper = int(config["resistance.upper"])
+    resistance_lower = int(config["resistance.lower"])
+    support_upper = int(config["support.upper"])
+    support_lower = int(config["support.lower"])
+    stop_loss_percent = int(config["stop_loss_percent"])
 
-    print(e.read_config())
+    # quote = api.get_quote(symbol)
+    quote = api.get_quote("KQ.m@SHFE.cu")
+    print(quote)
+    print(quote.underlying_quote)
+    print(quote.underlying_symbol)
 
-    number = 0
-    while True:
-        e.logger.info(number)
-        number += 1
-        time.sleep(5)
-
-    # api = TqApi(web_gui=True, auth=TqAuth("zh012", "Goat2015"))
     # k1 = api.get_tick_serial("SHFE.cu2203", 10)
     # k2 = api.get_kline_serial("SHFE.ni2206", 10)
 
-    # while True:
-    #     api.wait_update()
-    #     # if api.is_changing(k1.iloc[-1], "datetime"):
-    #     print(k1.iloc[-1])
+    while True:
+        api.wait_update()
+        print(quote)
+        print(quote.underlying_quote)
+        print(quote.underlying_symbol)
+        print()
 
 
 app = em.App(
@@ -49,6 +55,11 @@ app = em.App(
     default_config=config_schema,
     runner=strategy,
 )
+
+
+# @app.cli.command(name="list")
+# def better_status():
+#     print("overwrite")
 
 
 if __name__ == "__main__":

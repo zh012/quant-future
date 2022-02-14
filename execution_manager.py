@@ -20,7 +20,7 @@ import tailer
 on_windows = sys.platform == "win32"
 
 logging.basicConfig(
-    format="%(asctime)s - %(process)d - [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] (%(name)s %(process)d) %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
@@ -202,12 +202,10 @@ class App(Workspace):
         runner: Callable[[Execution], None],
         name: str = None,
         default_config: dict = None,
-        status_getter: Callable[[Execution], dict] = None,
     ) -> None:
         super().__init__(home, name)
         self.runner = runner
         self.default_config = default_config
-        self.status_getter = status_getter
 
         if not os.path.isdir(self.home):
             os.makedirs(self.home, exist_ok=True)
@@ -222,30 +220,30 @@ class App(Workspace):
     def execution_map(self) -> dict[str, Execution]:
         return {e.name: e for e in self.execution_list()}
 
+    def select_execution(self, name: str = None, message: str = None) -> Execution:
+        es = self.execution_map()
+
+        if not es:
+            typer.echo(f"No execution is found")
+            return
+
+        if e := es.get(name):
+            return e
+
+        message = message or "Please select one execution:"
+        if name:
+            message = f"The execution '{name}' does not exist.\n{message}"
+
+        name = questionary.select(message, es.keys()).ask()
+        if name:
+            return es[name]
+
     @cached_property
     def cli(self) -> typer.Typer:
         app = typer.Typer()
 
-        def select_execution(name: str = None, message: str = None) -> Execution:
-            es = self.execution_map()
-
-            if not es:
-                typer.echo(f"No execution is found")
-                return
-
-            if e := es.get(name):
-                return e
-
-            message = message or "Please select one execution:"
-            if name:
-                message = f"The execution '{name}' does not exist.\n{message}"
-
-            name = questionary.select(message, es.keys()).ask()
-            if name:
-                return es[name]
-
         def execute(e: Execution) -> None:
-            import atexit
+            # import atexit
 
             execution_pid = os.getpid()
             try:
@@ -259,9 +257,9 @@ class App(Workspace):
                     f"Faied to set execution pid {execution_pid} for '{e.name}'"
                 )
 
-            @atexit.register
-            def bye():
-                e.logger.info(f"Exit {execution_pid}")
+            # @atexit.register
+            # def bye():
+            #     e.logger.info(f"Exit {execution_pid}")
 
             try:
                 self.runner(e)
@@ -309,25 +307,29 @@ class App(Workspace):
                 raise typer.Exit(1)
 
         @app.command(help=f"Configure execution")
-        def config(name: Optional[str] = typer.Argument(None), reset: bool = False):
-            if e := select_execution(name):
+        def config(
+            name: Optional[str] = typer.Argument(None),
+            reset: bool = False,
+            open_with: str = None,
+        ):
+            if e := self.select_execution(name):
                 if reset:
                     typer.echo(f"Reset config to default value ...")
                     e.write_config(self.default_config)
                 typer.echo(f"Config: {e.config_file}")
                 if on_windows:
-                    os.system(f"notepad '{e.config_file}'")
+                    os.system(f"{open_with or 'notepad'} '{e.config_file}'")
                 else:
-                    os.system(f"vi '{e.config_file}'")
+                    os.system(f"{open_with or 'vi'} '{e.config_file}'")
 
         @app.command(help=f"Stop execution")
         def stop(name: Optional[str] = typer.Argument(None)):
-            if e := select_execution(name):
+            if e := self.select_execution(name):
                 e.stop()
 
         @app.command(help=f"Remove execution")
         def remove(name: Optional[str] = typer.Argument(None)):
-            if e := select_execution(name):
+            if e := self.select_execution(name):
                 if e.status() == ExecutionStatus.running:
                     typer.echo(f"Execution '{e.name}' is running. Please stop it first")
                 e.delete()
@@ -338,7 +340,7 @@ class App(Workspace):
             open_with: str = None,
             tail: bool = False,
         ):
-            if e := select_execution(name):
+            if e := self.select_execution(name):
                 if open_with:
                     os.system(f"{open_with} '{e.log_file}'")
                 else:
@@ -373,7 +375,7 @@ class App(Workspace):
 
         @app.command(help=f"Start execution")
         def start(name: Optional[str] = typer.Argument(None), service: bool = False):
-            if e := select_execution(name):
+            if e := self.select_execution(name):
                 if service:
                     start_execution_daemon(e)
                 else:
