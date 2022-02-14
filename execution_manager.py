@@ -238,51 +238,56 @@ class App(Workspace):
         if name:
             return es[name]
 
+    def execute(self, e: Execution) -> None:
+        import atexit
+
+        execution_pid = os.getpid()
+        try:
+            # TODO acquire a file lock before update the pid file
+            e.set_pid(execution_pid)
+        except ExecutionException:
+            e.logger.exception(f"Execution process {execution_pid} aborted.")
+            return
+        except:
+            e.logger.exception(
+                f"Faied to set execution pid {execution_pid} for '{e.name}'"
+            )
+
+        @atexit.register
+        def bye():
+            e.logger.info(f"Exit {execution_pid}")
+
+        try:
+            self.runner(e)
+            e.logger.info(f"Finished {execution_pid}")
+        except Exception as exc:
+            e.logger.exception(exc)
+
     @cached_property
     def cli(self) -> typer.Typer:
         app = typer.Typer()
-
-        def execute(e: Execution) -> None:
-            # import atexit
-
-            execution_pid = os.getpid()
-            try:
-                # TODO acquire a file lock before update the pid file
-                e.set_pid(execution_pid)
-            except ExecutionException:
-                e.logger.exception(f"Execution process {execution_pid} aborted.")
-                return
-            except:
-                self.logger.exception(
-                    f"Faied to set execution pid {execution_pid} for '{e.name}'"
-                )
-
-            # @atexit.register
-            # def bye():
-            #     e.logger.info(f"Exit {execution_pid}")
-
-            try:
-                self.runner(e)
-                e.logger.info("Execution finished")
-            except Exception as exc:
-                e.logger.exception(exc)
 
         def start_execution_daemon(e: Execution) -> None:
             if on_windows:
                 # from win32process import DETACHED_PROCESS
                 DETACHED_PROCESS = 8
-                pid = Popen(
+                Popen(
                     [sys.executable, sys.argv[0], "start", e.name],
                     creationflags=DETACHED_PROCESS,
                     shell=False,
                     close_fds=True,
-                ).pid
-                e.logger.info(f"running on windows: {pid}")
+                )
             else:
-                import daemon
 
-                with daemon.DaemonContext():
-                    execute(e.clone())
+                def preexec_function():
+                    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+
+                Popen(
+                    [sys.executable, sys.argv[0], "start", e.name],
+                    stdout=open(os.devnull, "w"),
+                    stderr=open(os.devnull, "w"),
+                    preexec_fn=preexec_function,
+                )
 
         @app.callback(invoke_without_command=True, no_args_is_help=True)
         def help():
@@ -323,9 +328,13 @@ class App(Workspace):
                     os.system(f"{open_with or 'vi'} '{e.config_file}'")
 
         @app.command(help=f"Stop execution")
-        def stop(name: Optional[str] = typer.Argument(None)):
+        def stop(name: Optional[str] = typer.Argument(None), force: bool = False):
             if e := self.select_execution(name):
-                e.stop()
+                if e.status() in (
+                    ExecutionStatus.running,
+                    ExecutionStatus.abnormal_proc,
+                ):
+                    e.stop()
 
         @app.command(help=f"Remove execution")
         def remove(name: Optional[str] = typer.Argument(None)):
@@ -375,10 +384,11 @@ class App(Workspace):
 
         @app.command(help=f"Start execution")
         def start(name: Optional[str] = typer.Argument(None), service: bool = False):
+            typer.secho(f"{os.getpid()}", fg=typer.colors.RED)
             if e := self.select_execution(name):
                 if service:
                     start_execution_daemon(e)
                 else:
-                    execute(e)
+                    self.execute(e)
 
         return app

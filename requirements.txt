@@ -7,4 +7,3 @@ dataset
 tailer
 pandas
 pendulum
-python-daemon # not needed on windows

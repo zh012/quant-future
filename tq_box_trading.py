@@ -19,11 +19,17 @@ config_schema = {
 
 
 def strategy(e: em.Execution):
+    e.logger.info("Started tq strategy")
+
     from tqsdk import TqApi, TqAuth
+
+    e.logger.info("Imported tq sdk")
 
     config = e.read_config()
     auth = TqAuth(config["tq.username"], config["tq.password"])
     api = TqApi(auth=auth)
+
+    e.logger.info("Initialized tq api")
     # api = TqApi(web_gui=True, auth=auth)
     symbol = config["contract.name"]
     resistance_upper = int(config["resistance.upper"])
@@ -34,19 +40,14 @@ def strategy(e: em.Execution):
 
     # quote = api.get_quote(symbol)
     quote = api.get_quote("KQ.m@SHFE.cu")
-    print(quote)
-    print(quote.underlying_quote)
-    print(quote.underlying_symbol)
+    e.logger.info(quote)
 
     # k1 = api.get_tick_serial("SHFE.cu2203", 10)
     # k2 = api.get_kline_serial("SHFE.ni2206", 10)
 
     while True:
         api.wait_update()
-        print(quote)
-        print(quote.underlying_quote)
-        print(quote.underlying_symbol)
-        print()
+        e.logger.info(f"{quote.instrument_name} {quote.datetime} {quote.last_price}")
 
 
 app = em.App(
@@ -63,4 +64,7 @@ app = em.App(
 
 
 if __name__ == "__main__":
+    import sys
+
+    print(sys.argv)
     app.cli()
