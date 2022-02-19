@@ -4,6 +4,8 @@ typer
 questionary
 psutil
 dataset
-tailer
 pandas
 pendulum
+tabulate
+python-telegram-bot
+notify-py

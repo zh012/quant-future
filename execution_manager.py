@@ -1,10 +1,13 @@
-from contextlib import contextmanager
+import queue
+import socket
+from contextlib import closing
 from enum import Enum
 import json
 import os
 import signal
 from subprocess import Popen
 import sys
+import threading
 from typing import Any, Callable, Optional
 import psutil
 import logging
@@ -16,13 +19,77 @@ import pandas as pd
 import typer
 import questionary
 import tailer
+import requests
+import notifypy
+
 
 on_windows = sys.platform == "win32"
+script_dir = os.path.abspath(os.path.split(__file__)[0])
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] (%(name)s %(process)d) %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+
+def get_free_port():
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(("", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
+class Notifier:
+    def __init__(
+        self,
+        *,
+        logger: logging.Logger,
+        telegram: dict = None,
+        desktop: bool = True,
+    ) -> None:
+        self.queue = queue.Queue()
+        self.telegram = telegram
+        self.desktop = desktop
+        self.logger = logger
+
+        if telegram:
+            self.telegram_channel_url = f"https://api.telegram.org/bot{telegram['bot']}/sendMessage?chat_id=-100{telegram['channel']}&text={{}}"
+        else:
+            self.telegram_channel_url = None
+
+    def run(self) -> None:
+        while msg := self.queue.get():
+            if self.desktop:
+                try:
+                    n = notifypy.Notify(
+                        default_notification_icon=os.path.join(
+                            script_dir, "gold-bar.png"
+                        )
+                    )
+                    n.title = msg[0]
+                    n.message = msg[1]
+                    n.send()
+                except:
+                    if self.logger:
+                        self.logger.error(f"failed to send desktop notfication {msg}")
+            if self.telegram_channel_url:
+                try:
+                    requests.get(
+                        self.telegram_channel_url.format(f"{msg[0]}\n{msg[1]}"),
+                        timeout=1,
+                    )
+                except:
+                    if self.logger:
+                        self.logger.error(f"failed to send desktop notfication {msg}")
+            self.logger.info(f"Notify: {msg}")
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self.run)
+        self.thread.setDaemon(True)
+        self.thread.start()
+
+    def send(self, title: str, message: str) -> None:
+        self.queue.put((title, message))
 
 
 class ExecutionException(Exception):
@@ -210,6 +277,9 @@ class App(Workspace):
         if not os.path.isdir(self.home):
             os.makedirs(self.home, exist_ok=True)
 
+    def read_config(self) -> dict:
+        return self.read_json(CONFIG_FILE_NAME, safe=True)
+
     def execution_list(self) -> list[Execution]:
         return [
             Execution(os.path.join(self.home, d), d)
@@ -268,14 +338,16 @@ class App(Workspace):
         app = typer.Typer()
 
         def start_execution_daemon(e: Execution) -> None:
+            output = open(e.file("output.txt"), "a")
             if on_windows:
                 # from win32process import DETACHED_PROCESS
                 DETACHED_PROCESS = 8
                 Popen(
                     [sys.executable, sys.argv[0], "start", e.name],
                     creationflags=DETACHED_PROCESS,
-                    shell=False,
                     close_fds=True,
+                    stdout=output,
+                    stderr=output,
                 )
             else:
 
@@ -284,9 +356,10 @@ class App(Workspace):
 
                 Popen(
                     [sys.executable, sys.argv[0], "start", e.name],
-                    stdout=open(os.devnull, "w"),
-                    stderr=open(os.devnull, "w"),
                     preexec_fn=preexec_function,
+                    close_fds=True,
+                    stdout=output,
+                    stderr=output,
                 )
 
         @app.callback(invoke_without_command=True, no_args_is_help=True)
@@ -354,10 +427,14 @@ class App(Workspace):
                     os.system(f"{open_with} '{e.log_file}'")
                 else:
                     with open(e.log_file, "r") as fp:
-                        print("\n".join(tailer.tail(fp, 100)))
-                        if tail:
-                            for line in tailer.follow(fp):
-                                print(line)
+                        print(fp.read())
+                    # tailer does not work well with unicode
+                    # TODO fix this later
+                    # with open(e.log_file, "r") as fp:
+                    #     print("\n".join(tailer.tail(fp, 100)))
+                    #     if tail:
+                    #         for line in tailer.follow(fp):
+                    #             print(line)
 
         @app.command(help=f"New execution")
         def new(name: Optional[str] = typer.Argument(None)):
@@ -384,7 +461,6 @@ class App(Workspace):
 
         @app.command(help=f"Start execution")
         def start(name: Optional[str] = typer.Argument(None), service: bool = False):
-            typer.secho(f"{os.getpid()}", fg=typer.colors.RED)
             if e := self.select_execution(name):
                 if service:
                     start_execution_daemon(e)
