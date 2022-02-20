@@ -114,7 +114,10 @@ def status():
         s = e.status()
         gui = ""
         if s == em.ExecutionStatus.running:
-            gui = e.read_text("__gui__")
+            try:
+                gui = e.read_text("__gui__")
+            except:
+                gui = ""
         config = e.read_config()
 
         return e.name, config.get("contract.name", ""), s.tr_zh(), gui
