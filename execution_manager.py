@@ -43,14 +43,16 @@ class Notifier:
     def __init__(
         self,
         *,
-        logger: logging.Logger,
+        logger: logging.Logger = None,
         telegram: dict = None,
-        desktop: bool = True,
+        desktop: bool = False,
+        title: str = "Notice",
     ) -> None:
         self.queue = queue.Queue()
         self.telegram = telegram
         self.desktop = desktop
         self.logger = logger
+        self.title = title
 
         if telegram:
             self.telegram_channel_url = f"https://api.telegram.org/bot{telegram['bot']}/sendMessage?chat_id=-100{telegram['channel']}&text={{}}"
@@ -88,8 +90,8 @@ class Notifier:
         self.thread.setDaemon(True)
         self.thread.start()
 
-    def send(self, title: str, message: str) -> None:
-        self.queue.put((title, message))
+    def send(self, message: str, title: str = None) -> None:
+        self.queue.put((title or self.title, message))
 
 
 class ExecutionException(Exception):
@@ -197,7 +199,7 @@ class Workspace:
 
     @cached_property
     def db(self) -> dataset.Database:
-        return dataset.connect(f"sqlite:///{self.file('execution.db')}")
+        return dataset.connect(f"sqlite:///{self.file('__db__')}")
 
 
 class Execution(Workspace):
@@ -420,13 +422,15 @@ class App(Workspace):
         def logs(
             name: Optional[str] = typer.Argument(None),
             open_with: str = None,
-            tail: bool = False,
+            file: Optional[str] = typer.Option(None, "-f", help="File name"),
+            # tail: bool = False,
         ):
             if e := self.select_execution(name):
+                f = file and e.file(file) or e.log_file
                 if open_with:
-                    os.system(f"{open_with} '{e.log_file}'")
+                    os.system(f"{open_with} '{f}'")
                 else:
-                    with open(e.log_file, "r") as fp:
+                    with open(f, "r") as fp:
                         print(fp.read())
                     # tailer does not work well with unicode
                     # TODO fix this later
@@ -437,7 +441,7 @@ class App(Workspace):
                     #             print(line)
 
         @app.command(help=f"New execution")
-        def new(name: Optional[str] = typer.Argument(None)):
+        def new(name: Optional[str] = typer.Argument(None), clone: str = None):
             if not name:
                 name = questionary.text(
                     "Name", validate=lambda x: bool(x.strip())
@@ -448,16 +452,29 @@ class App(Workspace):
                 typer.echo(f"The name '{name}' has been used.", fg=typer.color.RED)
                 raise typer.Exit(1)
 
+            if clone:
+                clone = Execution(os.path.join(self.home, clone))
+                if clone.status() == ExecutionStatus.not_found:
+                    typer.echo(
+                        f"The configuration '{clone}' does not exist.",
+                        fg=typer.color.RED,
+                    )
+                    raise typer.Exit(1)
+
             e.init()
-            e.write_config(self.default_config or {})
+
+            if clone:
+                init_config = clone.read_config()
+            elif self.default_config:
+                init_config = self.default_config
+            else:
+                init_config = {}
+            e.write_config(init_config)
 
             if on_windows:
                 os.system(f"notepad '{e.config_file}'")
             else:
                 os.system(f"vi '{e.config_file}'")
-
-            if questionary.confirm("Start the exeution?", default=False).ask():
-                start_execution_daemon(e)
 
         @app.command(help=f"Start execution")
         def start(name: Optional[str] = typer.Argument(None), service: bool = False):
