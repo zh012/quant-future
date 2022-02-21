@@ -18,7 +18,6 @@ import dataset
 import pandas as pd
 import typer
 import questionary
-import tailer
 import requests
 import notifypy
 
@@ -37,6 +36,13 @@ def get_free_port():
         s.bind(("", 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return s.getsockname()[1]
+
+
+def edit_file(fn, open_with=None):
+    if on_windows:
+        os.system(f"{open_with or 'notepad'} '{fn}'")
+    else:
+        os.system(f"{open_with or 'code'} '{fn}'")
 
 
 class Notifier:
@@ -397,10 +403,7 @@ class App(Workspace):
                     typer.echo(f"Reset config to default value ...")
                     e.write_config(self.default_config)
                 typer.echo(f"Config: {e.config_file}")
-                if on_windows:
-                    os.system(f"{open_with or 'notepad'} '{e.config_file}'")
-                else:
-                    os.system(f"{open_with or 'vi'} '{e.config_file}'")
+                edit_file(e.config_file, open_with)
 
         @app.command(help=f"Stop execution")
         def stop(name: Optional[str] = typer.Argument(None), force: bool = False):
@@ -421,27 +424,24 @@ class App(Workspace):
         @app.command(help=f"Check execution log")
         def logs(
             name: Optional[str] = typer.Argument(None),
-            open_with: str = None,
             file: Optional[str] = typer.Option(None, "-f", help="File name"),
-            # tail: bool = False,
+            _print: bool = typer.Option(False, "-p", help="Print to console"),
+            open_with: str = None,
         ):
             if e := self.select_execution(name):
                 f = file and e.file(file) or e.log_file
-                if open_with:
-                    os.system(f"{open_with} '{f}'")
-                else:
+                if _print:
                     with open(f, "r") as fp:
                         print(fp.read())
-                    # tailer does not work well with unicode
-                    # TODO fix this later
-                    # with open(e.log_file, "r") as fp:
-                    #     print("\n".join(tailer.tail(fp, 100)))
-                    #     if tail:
-                    #         for line in tailer.follow(fp):
-                    #             print(line)
+                else:
+                    edit_file(f, open_with)
 
         @app.command(help=f"New execution")
-        def new(name: Optional[str] = typer.Argument(None), clone: str = None):
+        def new(
+            name: Optional[str] = typer.Argument(None),
+            clone: bool = False,
+            open_with: str = None,
+        ):
             if not name:
                 name = questionary.text(
                     "Name", validate=lambda x: bool(x.strip())
@@ -452,29 +452,21 @@ class App(Workspace):
                 typer.echo(f"The name '{name}' has been used.", fg=typer.color.RED)
                 raise typer.Exit(1)
 
+            orig = None
             if clone:
-                clone = Execution(os.path.join(self.home, clone))
-                if clone.status() == ExecutionStatus.not_found:
-                    typer.echo(
-                        f"The configuration '{clone}' does not exist.",
-                        fg=typer.color.RED,
-                    )
+                if not (orig := self.select_execution()):
                     raise typer.Exit(1)
 
             e.init()
 
-            if clone:
-                init_config = clone.read_config()
+            if orig:
+                init_config = orig.read_config()
             elif self.default_config:
                 init_config = self.default_config
             else:
                 init_config = {}
             e.write_config(init_config)
-
-            if on_windows:
-                os.system(f"notepad '{e.config_file}'")
-            else:
-                os.system(f"vi '{e.config_file}'")
+            edit_file(e.config_file, open_with)
 
         @app.command(help=f"Start execution")
         def start(name: Optional[str] = typer.Argument(None), service: bool = False):
