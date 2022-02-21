@@ -215,7 +215,7 @@ def strategy(e: em.Execution):
             f"日期:{time_str()}\n历史仓位:{current_pos}手\n当日仓位:{today_pos}手\n今日目标:{today_target_pos}手"
         )
 
-        pos_task = TargetPosTask(api, symbol, price=lambda d: quote.ask_price1)
+        pos_task = TargetPosTask(api, symbol, price=lambda d: buy_range[1])
 
         today_buy, today_close = None, None
 
