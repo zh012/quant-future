@@ -44,27 +44,17 @@ config_schema = {
 
 
 def today_target(total_pos: int, current_pos: int, steps: int) -> int:
-    def stagger(total_pos: int, steps: int) -> list[int]:
-        quo, rem = total_pos // steps, total_pos % steps
-        stagger = [0]
-        for i in range(1, steps + 1):
-            stagger.append(stagger[i - 1] + quo + (rem and 1))
-            if rem > 0:
-                rem -= 1
-        return stagger
-
-    def re_stagger(s: list[int], current_pos: int) -> int:
-        for i, t in enumerate(s):
-            if current_pos <= t:
-                break
-        rem_steps = len(s) - i
-        rem_pos = s[-1] - current_pos
-        return stagger(rem_pos, rem_steps)
-
-    s = stagger(total_pos, steps)
-    if current_pos != 0:
-        s = re_stagger(s, current_pos)
-    return s[1]
+    quo, rem = total_pos // steps, total_pos % steps
+    stagger = [0]
+    for i in range(1, steps + 1):
+        stagger.append(stagger[i - 1] + quo + (rem and 1))
+        if rem > 0:
+            rem -= 1
+    for i, t in enumerate(stagger):
+        if current_pos < t:
+            return t
+    else:
+        return total_pos
 
 
 def strategy(e: em.Execution):
@@ -123,204 +113,64 @@ def strategy(e: em.Execution):
     e.logger.info(f"Api initialized. Web gui running at http://127.0.0.1:{port}")
 
     with closing(api):
-        # start the quant strategy
-        position = api.get_position(symbol)
-        quote = api.get_quote(symbol)
-
-        total_target_pos = round(budget * 0.2 / (support * quote.volume_multiple * 0.1))
-        current_pos = position.pos_long_his
-        today_pos = position.pos_long_today
-        today_date = today()
-
         buy_range = [support * 0.99, support * 1.01]
         stop_loss = support * 0.985
-
-        # initiate status
-        if e.db["status"].count() == 0:
-            e.db["status"].insert(
-                dict(
-                    symbol=symbol,
-                    strategy_started=today_date,
-                    budget=budget,
-                    support=support,
-                    resistance=resistance,
-                    target_pos=total_target_pos,
-                    current_pos=current_pos,
-                    updated_at=pendulum.now("UTC"),
-                    created_at=pendulum.now("UTC"),
-                )
-            )
-            e.db["event"].insert(
-                dict(
-                    event="started",
-                    date=today_date,
-                    symbol=symbol,
-                    budget=budget,
-                    support=support,
-                    resistance=resistance,
-                    target_pos=total_target_pos,
-                    current_pos=current_pos,
-                    pid=os.getpid(),
-                    created_at=pendulum.now("UTC"),
-                )
-            )
-            noti.send(
-                f"<策略启动>\n总资金: {budget}\n入场价: {buy_range}\n止盈价: {resistance}\n止损价: {stop_loss}"
-            )
-        else:
-            status = e.db["status"].find_one()
-            if (symbol, budget, support, resistance) != (
-                status["symbol"],
-                status["budget"],
-                status["support"],
-                status["resistance"],
-            ):
-                e.db["status"].update(
-                    dict(
-                        id=status["id"],
-                        symbol=symbol,
-                        budget=budget,
-                        support=support,
-                        resistance=resistance,
-                        target_pos=total_target_pos,
-                        current_pos=current_pos,
-                        updated_at=pendulum.now("UTC"),
-                    ),
-                    keys=["id"],
-                )
-                e.db["event"].insert(
-                    dict(
-                        event="config_changed",
-                        date=today_date,
-                        symbol=symbol,
-                        budget=budget,
-                        support=support,
-                        resistance=resistance,
-                        total_target_pos=total_target_pos,
-                        current_pos=current_pos,
-                        pid=os.getpid(),
-                        created_at=pendulum.now("UTC"),
-                    )
-                )
-            noti.send(
-                f"<策略重启>\n总资金: {budget}\n入场价: {buy_range}\n止盈价: {resistance}\n止损价: {stop_loss}"
-            )
-
-        if position.pos_long_his >= total_target_pos or today_pos > 0:
-            today_target_pos = None
-        else:
-            today_target_pos = today_target(total_target_pos, current_pos, 5)
-
+        position = api.get_position(symbol)
+        quote = api.get_quote(symbol)
+        total_target_pos = round(budget * 0.2 / (support * quote.volume_multiple * 0.1))
+        today_target_pos = today_target(total_target_pos, position.pos_long, 5)
+        pos_task = TargetPosTask(
+            api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
+        )
         noti.send(
-            f"日期:{time_str()}\n历史仓位:{current_pos}手\n当日仓位:{today_pos}手\n今日目标:{today_target_pos}手"
+            f"{time_str()} 策略启动\n总资金:{budget}\n入场价:{buy_range}\n止盈价:{resistance}\n止损价:{stop_loss}\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日目标仓位:{today_target_pos}手"
         )
 
-        pos_task = TargetPosTask(api, symbol, price=lambda d: buy_range[1])
-
-        today_buy, today_close = None, None
-
+        today_date = today()
         while True:
             api.wait_update()
 
-            if api.is_changing(position):
-                e.logger.info(
-                    f"position changes: his ({[current_pos, position.pos_long_his]}) today ({[today_pos, position.pos_long_today]})"
-                )
-                if (
-                    current_pos != position.pos_long_his
-                    or today_pos != position.pos_long_today
-                ):
-                    current_pos = position.pos_long_his
-                    today_pos = position.pos_long_today
-                    e.db["event"].insert(
-                        dict(
-                            event="position",
-                            date=today_date,
-                            symbol=symbol,
-                            current_pos=current_pos,
-                            today_pos=today_pos,
-                            pid=os.getpid(),
-                            created_at=pendulum.now("UTC"),
-                        )
-                    )
-                    noti.send(
-                        f"日期:{time_str()}\n历史仓位:{current_pos}手\n当日仓位:{today_pos}手\n今日目标:{today_target_pos}手"
-                    )
-
             if api.is_changing(quote, "last_price"):
                 e.logger.info(f"price changed: {symbol} {quote.last_price})")
-                if quote.last_price > buy_range[0] and quote.last_price < buy_range[1]:
+                if (
+                    position.pos_long_today == 0
+                    and today_target_pos != total_target_pos
+                    and quote.last_price > buy_range[0]
+                    and quote.last_price < buy_range[1]
+                ):
                     pos_task.set_target_volume(today_target_pos)
-                    # api.insert_order(
-                    #     symbol,
-                    #     direction="BUY",
-                    #     offset="OPEN",
-                    #     volume=today_target_pos - current_pos,
-                    #     limit_price=quote.ask_price1,
-                    # )
-                    if today_buy != today_date:
-                        today_buy = today_date
-                        e.db["event"].insert(
-                            dict(
-                                event="open_position",
-                                date=today_date,
-                                symbol=symbol,
-                                current_pos=current_pos,
-                                today_target_pos=today_target_pos,
-                                pid=os.getpid(),
-                                created_at=pendulum.now("UTC"),
-                            )
-                        )
-                        noti.send(f"{time_str()}\n加仓 目标{today_target_pos}手")
-                elif quote.last_price <= stop_loss or quote.last_price >= resistance:
-                    earn = quote.last_price >= resistance
+                    noti.send(
+                        f"{time_str()} 加仓\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
+                    )
+                elif quote.last_price <= stop_loss:
                     pos_task.set_target_volume(0)
-                    if today_close != today_date:
-                        today_close = today_date
-                        e.db["event"].insert(
-                            dict(
-                                event=earn and "stop_earn" or "stop_loss",
-                                date=today_date,
-                                symbol=symbol,
-                                current_pos=current_pos,
-                                pid=os.getpid(),
-                                created_at=pendulum.now("UTC"),
-                            )
-                        )
-                        noti.send(f"{time_str()}\n平仓 {earn and '止盈' or '止损'}")
+                    noti.send(f"{time_str()}\n平仓止损")
                     break
+                elif quote.last_price >= resistance:
+                    pos_task.set_target_volume(0)
+                    noti.send(f"{time_str()}\n平仓止盈")
+                    break
+
+            if api.is_changing(position, "pos_long"):
+                noti.send(
+                    f"{time_str()} 仓位变动\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
+                )
 
             new_date = today()
             if today_date != new_date and hour() > 5:
                 today_date = new_date
-                today_target_pos = today_target(total_target_pos, current_pos, 5)
-                e.db["event"].insert(
-                    dict(
-                        event="new_day",
-                        date=today_date,
-                        symbol=symbol,
-                        today_target_pos=today_target_pos,
-                        pid=os.getpid(),
-                        created_at=pendulum.now("UTC"),
+                new_target_pos = today_target(total_target_pos, position.pos_long, 5)
+                if new_target_pos != today_target_pos:
+                    today_target_pos = new_target_pos
+                    noti.send(
+                        f"{time_str()} 仓位目标\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                     )
-                )
-                noti.send(
-                    f"日期:{time_str()}\n历史仓位:{current_pos}手\n当日仓位:{today_pos}手\n今日目标:{today_target_pos}手"
-                )
 
-        e.logger.info(
-            f"Strategy exits: {earn and 'earn' or 'loss'}. Closing all positions ..."
-        )
         while True:
             api.wait_update()
-            if api.is_changing(position):
-                e.logger.info(
-                    f"pos_long_his: {position.pos_long_his}, pos_long_today: {position.pos_long_today}"
-                )
-                if position.pos_long_his + position.pos_long_today == 0:
-                    break
-
-    e.logger.info("All positions closed.")
+            if position.pos_long == 0:
+                noti.send(f"{time_str()} 平仓结束\n策略退出")
+                break
 
 
 app = em.App(
