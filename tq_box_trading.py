@@ -119,7 +119,7 @@ def strategy(e: em.Execution):
         position = api.get_position(symbol)
         quote = api.get_quote(symbol)
         total_target_pos = round(budget * 0.2 / (support * quote.volume_multiple * 0.1))
-        today_target_pos = today_target(total_target_pos, position.pos_long, 5)
+        today_target_pos = today_target(total_target_pos, position.pos_long_his, 5)
         # 上交所黄金不能使用市价单
         # pos_task = TargetPosTask(
         #     api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
@@ -137,7 +137,6 @@ def strategy(e: em.Execution):
             api.wait_update()
 
             if api.is_changing(quote, "last_price"):
-                e.logger.info(f"price changed: {symbol} {quote.last_price})")
                 if (
                     position.pos_long_today == 0
                     and today_target_pos != total_target_pos
@@ -167,7 +166,9 @@ def strategy(e: em.Execution):
             new_date = today()
             if today_date != new_date and hour() > 5:
                 today_date = new_date
-                new_target_pos = today_target(total_target_pos, position.pos_long, 5)
+                new_target_pos = today_target(
+                    total_target_pos, position.pos_long_his, 5
+                )
                 if new_target_pos != today_target_pos:
                     today_target_pos = new_target_pos
                     today_volume_set = False
