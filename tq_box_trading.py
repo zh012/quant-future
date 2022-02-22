@@ -113,14 +113,20 @@ def strategy(e: em.Execution):
     e.logger.info(f"Api initialized. Web gui running at http://127.0.0.1:{port}")
 
     with closing(api):
+        today_volume_set = False
         buy_range = [support * 0.99, support * 1.01]
         stop_loss = support * 0.985
         position = api.get_position(symbol)
         quote = api.get_quote(symbol)
         total_target_pos = round(budget * 0.2 / (support * quote.volume_multiple * 0.1))
         today_target_pos = today_target(total_target_pos, position.pos_long, 5)
+        # 上交所黄金不能使用市价单
+        # pos_task = TargetPosTask(
+        #     api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
+        # )
         pos_task = TargetPosTask(
-            api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
+            api,
+            symbol,
         )
         noti.send(
             f"{time_str()} 策略启动\n总资金:{budget}\n入场价:{buy_range}\n止盈价:{resistance}\n止损价:{stop_loss}\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日目标仓位:{today_target_pos}手"
@@ -135,10 +141,12 @@ def strategy(e: em.Execution):
                 if (
                     position.pos_long_today == 0
                     and today_target_pos != total_target_pos
+                    and not today_volume_set
                     and quote.last_price > buy_range[0]
                     and quote.last_price < buy_range[1]
                 ):
                     pos_task.set_target_volume(today_target_pos)
+                    today_volume_set = True
                     noti.send(
                         f"{time_str()} 加仓\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                     )
@@ -162,6 +170,7 @@ def strategy(e: em.Execution):
                 new_target_pos = today_target(total_target_pos, position.pos_long, 5)
                 if new_target_pos != today_target_pos:
                     today_target_pos = new_target_pos
+                    today_volume_set = False
                     noti.send(
                         f"{time_str()} 仓位目标\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                     )

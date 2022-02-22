@@ -88,7 +88,7 @@ class Notifier:
                     )
                 except:
                     if self.logger:
-                        self.logger.error(f"failed to send desktop notfication {msg}")
+                        self.logger.error(f"failed to send telegram notfication {msg}")
             self.logger.info(f"Notify: {msg}")
 
     def start(self) -> None:
