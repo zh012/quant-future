@@ -53,12 +53,12 @@ def today_target(total_pos: int, current_pos: int, steps: int) -> int:
                 rem -= 1
         return stagger
 
-    def re_stagger(stagger: list[int], current_pos: int) -> int:
-        for i, t in enumerate(stagger):
+    def re_stagger(s: list[int], current_pos: int) -> int:
+        for i, t in enumerate(s):
             if current_pos <= t:
                 break
-        rem_steps = len(stagger) - i
-        rem_pos = stagger[-1] - current_pos
+        rem_steps = len(s) - i
+        rem_pos = s[-1] - current_pos
         return stagger(rem_pos, rem_steps)
 
     s = stagger(total_pos, steps)
@@ -219,27 +219,7 @@ def strategy(e: em.Execution):
 
         today_buy, today_close = None, None
 
-        pre_position = dict(position)
-
         while True:
-            new_date = today()
-            if today_date != new_date and hour() > 5:
-                today_date = new_date
-                today_target_pos = today_target(total_target_pos, current_pos, 5)
-                e.db["event"].insert(
-                    dict(
-                        event="new_day",
-                        date=today_date,
-                        symbol=symbol,
-                        today_target_pos=today_target_pos,
-                        pid=os.getpid(),
-                        created_at=pendulum.now("UTC"),
-                    )
-                )
-                noti.send(
-                    f"日期:{time_str()}\n历史仓位:{current_pos}手\n当日仓位:{today_pos}手\n今日目标:{today_target_pos}手"
-                )
-
             api.wait_update()
 
             if api.is_changing(position):
@@ -309,6 +289,24 @@ def strategy(e: em.Execution):
                         )
                         noti.send(f"{time_str()}\n平仓 {earn and '止盈' or '止损'}")
                     break
+
+            new_date = today()
+            if today_date != new_date and hour() > 5:
+                today_date = new_date
+                today_target_pos = today_target(total_target_pos, current_pos, 5)
+                e.db["event"].insert(
+                    dict(
+                        event="new_day",
+                        date=today_date,
+                        symbol=symbol,
+                        today_target_pos=today_target_pos,
+                        pid=os.getpid(),
+                        created_at=pendulum.now("UTC"),
+                    )
+                )
+                noti.send(
+                    f"日期:{time_str()}\n历史仓位:{current_pos}手\n当日仓位:{today_pos}手\n今日目标:{today_target_pos}手"
+                )
 
         e.logger.info(
             f"Strategy exits: {earn and 'earn' or 'loss'}. Closing all positions ..."
