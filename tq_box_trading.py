@@ -11,7 +11,8 @@ import pendulum
 
 
 def today():
-    return pendulum.now().in_timezone("Asia/Shanghai").date()
+    # 北京时间晚8点以后算第二天
+    return pendulum.now().in_timezone("Asia/Shanghai").add(hours=4).date()
 
 
 def hour():
@@ -129,6 +130,7 @@ def strategy(e: em.Execution):
             api,
             symbol,
         )
+
         noti.send(
             f"{time_str()} 策略启动\n总资金:{budget}\n入场价:{buy_range}\n止盈价:{resistance}\n止损价:{stop_loss}\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日目标仓位:{today_target_pos}手"
         )
@@ -153,7 +155,6 @@ def strategy(e: em.Execution):
             if api.is_changing(quote, "last_price"):
                 if (
                     position.pos_long_today == 0
-                    and today_target_pos != total_target_pos
                     and not today_volume_set
                     and quote.last_price > buy_range[0]
                     and quote.last_price < buy_range[1]
@@ -178,7 +179,7 @@ def strategy(e: em.Execution):
                 )
 
             new_date = today()
-            if today_date != new_date and hour() > 5:
+            if today_date != new_date:
                 today_date = new_date
                 new_target_pos = today_target(
                     total_target_pos, position.pos_long_his, 5
