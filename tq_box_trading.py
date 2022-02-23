@@ -1,3 +1,4 @@
+import asyncio
 from asyncio.log import logger
 from contextlib import closing
 import math
@@ -133,8 +134,21 @@ def strategy(e: em.Execution):
         )
 
         today_date = today()
+        timeout_times = 0
         while True:
-            api.wait_update()
+
+            try:
+                api.wait_update()
+            except asyncio.exceptions.TimeoutError:
+                timeout_times += 1
+                if timeout_times == 1:
+                    noti.send(f"{time_str()}\n网络连接超时，请及时检查")
+                elif timeout_times >= 5:
+                    noti.send(f"{time_str()}\n网络连接超时5次，策略退出运行")
+                    break
+                continue
+
+            timeout_times = 0
 
             if api.is_changing(quote, "last_price"):
                 if (
@@ -176,11 +190,12 @@ def strategy(e: em.Execution):
                         f"{time_str()} 仓位目标\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                     )
 
-        while True:
-            api.wait_update()
-            if position.pos_long == 0:
-                noti.send(f"{time_str()} 平仓结束\n策略退出")
-                break
+        if timeout_times == 0:
+            while True:
+                api.wait_update()
+                if position.pos_long == 0:
+                    noti.send(f"{time_str()} 平仓结束\n策略退出")
+                    break
 
 
 app = em.App(
