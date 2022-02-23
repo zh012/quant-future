@@ -115,13 +115,11 @@ def strategy(e: em.Execution):
     e.logger.info(f"Api initialized. Web gui running at http://127.0.0.1:{port}")
 
     with closing(api):
-        today_volume_set = False
         buy_range = [support * 0.99, support * 1.01]
         stop_loss = support * 0.985
         position = api.get_position(symbol)
         quote = api.get_quote(symbol)
         total_target_pos = round(budget * 0.2 / (support * quote.volume_multiple * 0.1))
-        today_target_pos = today_target(total_target_pos, position.pos_long_his, 5)
         # 上交所黄金不能使用市价单
         # pos_task = TargetPosTask(
         #     api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
@@ -132,11 +130,12 @@ def strategy(e: em.Execution):
         )
 
         noti.send(
-            f"{time_str()} 策略启动\n总资金:{budget}\n入场价:{buy_range}\n止盈价:{resistance}\n止损价:{stop_loss}\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日目标仓位:{today_target_pos}手"
+            f"{time_str()} 策略启动\n总资金:{budget}\n入场价:{buy_range}\n止盈价:{resistance}\n止损价:{stop_loss}\n总目标仓位:{total_target_pos}手\n昨仓:{position.pos_long_his}手\n今仓:{position.pos_long_today}手"
         )
 
-        today_date = today()
         timeout_times = 0
+        set_target_vol = None
+
         while True:
 
             try:
@@ -145,51 +144,42 @@ def strategy(e: em.Execution):
                 timeout_times += 1
                 if timeout_times == 1:
                     noti.send(f"{time_str()}\n网络连接超时，请及时检查")
+                    continue
                 elif timeout_times >= 5:
                     noti.send(f"{time_str()}\n网络连接超时5次，策略退出运行")
                     break
-                continue
 
             timeout_times = 0
+            today_target_pos = today_target(total_target_pos, position.pos_long_his, 5)
 
             if api.is_changing(quote, "last_price"):
                 if (
-                    position.pos_long_today == 0
-                    and not today_volume_set
+                    set_target_vol != today_target_pos
                     and quote.last_price > buy_range[0]
                     and quote.last_price < buy_range[1]
                 ):
                     pos_task.set_target_volume(today_target_pos)
-                    today_volume_set = True
+                    set_target_vol = today_target_pos
                     noti.send(
                         f"{time_str()} 加仓\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                     )
                 elif quote.last_price <= stop_loss:
                     pos_task.set_target_volume(0)
-                    noti.send(f"{time_str()}\n平仓止损")
+                    noti.send(
+                        f"{time_str()}\n平仓止损\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:0手"
+                    )
                     break
                 elif quote.last_price >= resistance:
                     pos_task.set_target_volume(0)
-                    noti.send(f"{time_str()}\n平仓止盈")
+                    noti.send(
+                        f"{time_str()}\n平仓止盈\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:0手"
+                    )
                     break
 
             if api.is_changing(position, "pos_long"):
                 noti.send(
                     f"{time_str()} 仓位变动\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                 )
-
-            new_date = today()
-            if today_date != new_date:
-                today_date = new_date
-                new_target_pos = today_target(
-                    total_target_pos, position.pos_long_his, 5
-                )
-                if new_target_pos != today_target_pos:
-                    today_target_pos = new_target_pos
-                    today_volume_set = False
-                    noti.send(
-                        f"{time_str()} 仓位目标\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
-                    )
 
         if timeout_times == 0:
             while True:
