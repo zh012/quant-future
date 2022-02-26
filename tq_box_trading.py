@@ -3,6 +3,8 @@ from asyncio.log import logger
 from contextlib import closing
 import math
 import os
+import time
+import traceback
 import execution_manager as em
 from tabulate import tabulate
 import typer
@@ -59,7 +61,28 @@ def today_target(total_pos: int, current_pos: int, steps: int) -> int:
         return total_pos
 
 
-def strategy(e: em.Execution):
+_notifier = None
+
+
+def get_notifier(e: em.Execution) -> em.Notifier:
+    global _notifier
+
+    if not _notifier:
+        config = e.read_config()
+        symbol = config["contract.name"]
+        if bot := config.get("tel.bot"):
+            telegram = {"bot": bot, "channel": config.get("tel.channel")}
+        else:
+            telegram = None
+        desktop = config.get("desktop.notification")
+        _notifier = em.Notifier(
+            logger=e.logger, telegram=telegram, desktop=desktop, title=f"震荡策略{symbol}"
+        )
+        _notifier.start()
+    return _notifier
+
+
+def get_api(e: em.Execution):
     from tqsdk import (
         TqApi,
         TqAuth,
@@ -74,23 +97,6 @@ def strategy(e: em.Execution):
     e.logger.info("SDK imported")
 
     config = e.read_config()
-    symbol = config["contract.name"]
-    resistance = int(config["resistance"])
-    support = int(config["support"])
-    budget = int(config["budget"])
-
-    # config the notifier
-    if bot := config.get("tel.bot"):
-        telegram = {"bot": bot, "channel": config.get("tel.channel")}
-    else:
-        telegram = None
-    desktop = config.get("desktop.notification")
-    noti = em.Notifier(
-        logger=e.logger, telegram=telegram, desktop=desktop, title=f"震荡策略{symbol}"
-    )
-    noti.start()
-
-    # config the tq api
     auth = TqAuth(config["tq.username"], config["tq.password"])
 
     tr_mode = config.get("tr.mode", "sim")
@@ -105,64 +111,73 @@ def strategy(e: em.Execution):
 
     port = em.get_free_port()
     e.write_text("__gui__", f"http://127.0.0.1:{port}")
-    api = TqApi(
+    return TqApi(
         account=broker_account,
         auth=auth,
         web_gui=f":{port}",
         debug=e.file("tq-debug.txt"),
     )
 
-    e.logger.info(f"Api initialized. Web gui running at http://127.0.0.1:{port}")
+
+_strategy_exiting = False
+
+
+def strategy(e: em.Execution):
+    global _strategy_exiting
+    from tqsdk import TargetPosTask
+
+    noti = get_notifier(e)
+    api = get_api(e)
+
+    config = e.read_config()
+    symbol = config["contract.name"]
+    resistance = int(config["resistance"])
+    support = int(config["support"])
+    budget = int(config["budget"])
+    buy_range = [support * 0.99, support * 1.01]
+    stop_loss = support * 0.985
+
+    # 上交所黄金不能使用市价单
+    # pos_task = TargetPosTask(
+    #     api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
+    # )
+    pos_task = TargetPosTask(
+        api,
+        symbol,
+    )
 
     with closing(api):
-        buy_range = [support * 0.99, support * 1.01]
-        stop_loss = support * 0.985
         position = api.get_position(symbol)
         quote = api.get_quote(symbol)
         total_target_pos = round(budget * 0.2 / (support * quote.volume_multiple * 0.1))
-        # 上交所黄金不能使用市价单
-        # pos_task = TargetPosTask(
-        #     api, symbol, price=lambda d: d == "BUY" and buy_range[1] or quote.bid_price1
-        # )
-        pos_task = TargetPosTask(
-            api,
-            symbol,
-        )
+        notified_target = None
+
+        def close_position():
+            while position.pos_long != 0:
+                pos_task.set_target_volume(0)
+                api.wait_update()
+            noti.send(f"{time_str()} 平仓结束\n策略退出")
+
+        if _strategy_exiting:
+            close_position()
+            return
 
         noti.send(
             f"{time_str()} 策略启动\n总资金:{budget}\n入场价:{buy_range}\n止盈价:{resistance}\n止损价:{stop_loss}\n总目标仓位:{total_target_pos}手\n昨仓:{position.pos_long_his}手\n今仓:{position.pos_long_today}手"
         )
-
-        timeout_times = 0
-        set_target_vol = None
-
         while True:
+            api.wait_update()
 
-            try:
-                api.wait_update()
-            except asyncio.exceptions.TimeoutError:
-                timeout_times += 1
-                if timeout_times == 1:
-                    noti.send(f"{time_str()}\n网络连接超时，请及时检查")
-                    continue
-                elif timeout_times >= 5:
-                    noti.send(f"{time_str()}\n网络连接超时5次，策略退出运行")
-                    break
-
-            timeout_times = 0
             today_target_pos = today_target(total_target_pos, position.pos_long_his, 5)
 
             if api.is_changing(quote, "last_price"):
-                if (
-                    set_target_vol != today_target_pos
-                    and quote.last_price > buy_range[0]
-                    and quote.last_price < buy_range[1]
-                ):
+                if quote.last_price > buy_range[0] and quote.last_price < buy_range[1]:
                     pos_task.set_target_volume(today_target_pos)
-                    set_target_vol = today_target_pos
-                    noti.send(
-                        f"{time_str()} 加仓\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
-                    )
+                    if notified_target != today_target_pos:
+                        notified_target = today_target_pos
+                        noti.send(
+                            f"{time_str()} 加仓\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
+                        )
                 elif quote.last_price <= stop_loss:
                     pos_task.set_target_volume(0)
                     noti.send(
@@ -181,19 +196,27 @@ def strategy(e: em.Execution):
                     f"{time_str()} 仓位变动\n总目标仓位:{total_target_pos}手\n已有仓位:{position.pos_long}手\n今日仓位目标:{today_target_pos}手"
                 )
 
-        if timeout_times == 0:
-            while True:
-                api.wait_update()
-                if position.pos_long == 0:
-                    noti.send(f"{time_str()} 平仓结束\n策略退出")
-                    break
+        close_position()
+
+
+def strategy_with_retry(e: em.Execution):
+    backoff = int(e.read_config().get("retry.backoff", 3 * 60))
+    noti = get_notifier(e)
+
+    while True:
+        try:
+            strategy(e)
+            break
+        except Exception as e:
+            noti.send(noti.send(f"{time_str()} 程序异常\n{backoff}秒后重启\n{e}"))
+            time.sleep(backoff)
 
 
 app = em.App(
     home=strategy_home,
     name=strategy_name,
     default_config=config_schema,
-    runner=strategy,
+    runner=strategy_with_retry,
 )
 
 
