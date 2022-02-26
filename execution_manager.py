@@ -412,7 +412,7 @@ class App(Workspace):
                     ExecutionStatus.running,
                     ExecutionStatus.abnormal_proc,
                 ):
-                    e.stop()
+                    e.stop(force)
 
         @app.command(help=f"Remove execution")
         def remove(name: Optional[str] = typer.Argument(None)):
