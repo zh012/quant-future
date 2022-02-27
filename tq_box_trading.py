@@ -210,8 +210,8 @@ def strategy_with_retry(e: em.Execution):
         except KeyboardInterrupt:
             noti.send(noti.send(f"{time_str()} 手动停止策略运行"))
             raise
-        except Exception as e:
-            noti.send(noti.send(f"{time_str()} 程序异常\n{backoff}秒后重启\n{e}"))
+        except Exception as exc:
+            noti.send(noti.send(f"{time_str()} 程序异常\n{backoff}秒后重启\n{exc}"))
             time.sleep(backoff)
 
 
